@@ -60,7 +60,7 @@ The project is split into two main phases:
 We start from existing open-source Verus code, including:
 
 - the main Verus repo (examples, tests, verified libraries),
-- Verus-based projects listed on the Verus publications/projects page, and
+- Verus-based projects listed on the [Verus publications/projects page](https://verus-lang.github.io/verus/publications-and-projects/), and
 - internal benchmarks and artifacts (e.g., VeriStruct data-structure modules).
 
 Large modules and full repos are too big for individual SFT samples. Instead, we use the existing **Verus minimizer** to turn big programs into small, self-contained examples.

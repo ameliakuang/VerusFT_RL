@@ -1,8 +1,8 @@
-# VerusSFT: Supervised Fine-Tuning for Verification-Oriented Rust/Verus Code
+# VerusFT-RL: Fine-Tuning and RL for Verification-Oriented Rust/Verus Code
 
 ## Overview
 
-VerusSFT is a research repo for exploring **supervised fine-tuning (SFT)** of language models on **verification-oriented Rust/Verus code**.
+VerusFT-RL is a research repo for exploring **supervised fine-tuning (SFT)** and **reinforcement learning (RL)** of language models on **verification-oriented Rust/Verus code**.
 
 General-purpose code LLMs often struggle with Verus-specific concepts:
 
@@ -48,7 +48,7 @@ Supervised fine-tuning on a curated corpus of **minimized, self-contained Verus 
 
 ## Related Work
 
-VerusSFT builds on a growing body of literature exploring language-model-assisted verification. Prior systems such as VeriStruct focus on prompt engineering and retrieval but stop short of supervised fine-tuning on minimized Verus corpora. Recent work like the arXiv preprint [arXiv:2505.20302](https://arxiv.org/pdf/2505.20302) examines adjacent verification-aware fine-tuning strategies, underscoring the demand for reproducible datasets, Verus-native evaluation harnesses, and head-to-head comparisons between text-only and structure-augmented representations. This proposal positions VerusSFT to complement that line of research by emphasizing minimized examples, multi-task SFT, and rigorous Verus-based metrics.
+VerusFT-RL builds on a growing body of literature exploring language-model-assisted verification. Prior systems such as VeriStruct focus on prompt engineering and retrieval but stop short of supervised fine-tuning on minimized Verus corpora. Recent work like the arXiv preprint [arXiv:2505.20302](https://arxiv.org/pdf/2505.20302) examines adjacent verification-aware fine-tuning strategies, underscoring the demand for reproducible datasets, Verus-native evaluation harnesses, and head-to-head comparisons between text-only and structure-augmented representations. This proposal positions VerusFT-RL to complement that line of research by emphasizing minimized examples, multi-task SFT, RL-based refinement, and rigorous Verus-based metrics.
 
 ---
 
@@ -155,7 +155,7 @@ Benchmark targets include canonical Verus data structure modules (e.g., ring buf
 
 ## Reinforcement Learning Extensions for Verification Agents
 
-While VerusSFT is anchored in supervised fine-tuning, we also plan to explore reinforcement learning (RL) strategies for LLM-based verification agents. These extensions are directly motivated by systems like VeriStruct and DeepSeek-style reasoners, and they provide a roadmap for going beyond static prompting.
+While VerusFT-RL is anchored in supervised fine-tuning, it equally emphasizes reinforcement learning (RL) strategies for LLM-based verification agents. These extensions are directly motivated by systems like VeriStruct and DeepSeek-style reasoners, and they provide a roadmap for going beyond static prompting.
 
 ### 1. Three RL Paradigms
 

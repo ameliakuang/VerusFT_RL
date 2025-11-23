@@ -1,13 +1,13 @@
-# VerusSFT - Supervised Fine-Tuning for Verus Code Generation
+# VerusFT-RL - Fine-Tuning and RL for Verus Code Generation
 
-A supervised fine-tuning (SFT) project for training language models to generate Rust code with Verus specifications.
+A fine-tuning and reinforcement learning (RL) project for training language models to generate Rust code with Verus specifications.
 
 ## Overview
 
-This project demonstrates how to fine-tune a language model to generate Rust functions annotated with Verus specifications. It uses:
+This project demonstrates how to fine-tune and apply reinforcement learning to a language model to generate Rust functions annotated with Verus specifications. It uses:
 
 - **Hugging Face Transformers** for model loading and inference
-- **TRL (Transformer Reinforcement Learning)** for supervised fine-tuning
+- **TRL (Transformer Reinforcement Learning)** for supervised fine-tuning and reinforcement learning
 - **PEFT (Parameter-Efficient Fine-Tuning)** with LoRA for efficient training
 - **GPT-2** as the base model (can be replaced with code-specific models)
 
@@ -31,7 +31,7 @@ This project demonstrates how to fine-tune a language model to generate Rust fun
 ```bash
 # Clone the repository
 git clone <your-repo-url>
-cd VerusSFT
+cd VerusFT-RL
 
 # Install dependencies
 pip install transformers trl datasets peft accelerate torch
@@ -98,7 +98,7 @@ Edit the `build_dataset()` function in `sft_example.py` to add your own Verus ex
 ## File Structure
 
 ```
-VerusSFT/
+VerusFT-RL/
 ├── sft_example.py          # Main training script
 ├── test_inference.py       # Inference/testing script
 ├── README.md               # This file

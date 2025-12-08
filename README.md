@@ -242,7 +242,7 @@ We start from existing open-source Verus code, including:
 - Verus-based projects listed on the [Verus publications/projects page](https://verus-lang.github.io/verus/publications-and-projects/), and
 - internal benchmarks and artifacts (e.g., [VeriStruct](https://github.com/ChuyueSun/VeriStruct) data-structure modules).
 
-Large modules and full repos are too big for individual SFT samples. Instead, we use the existing **Verus minimizer** to turn big programs into small, self-contained examples.
+Large modules and full repos are too big for individual SFT samples. Instead, we use the existing **Verus minimizer** to turn big programs into small, self-contained examples. When the minimizer is unavailable or a repo mixes plain Rust and Verus, follow the [Rust/Verus Code Extraction Method](./RUST_VERUS_EXTRACTION.md) to isolate dependency-free verifying snippets before serialization.
 
 **Minimizer tool:**
 - Location: [`source/tools/minimizers/`](https://github.com/ChuyueSun/verus/tree/main/source/tools/minimizers) in the Verus repo
@@ -687,6 +687,7 @@ This repo is designed to support multiple small research projects (e.g., rotatio
 
 | ID | Subproject | Status | Difficulty | Description |
 |----|------------|--------|------------|-------------|
+| 0 | **Rust/Verus Extraction & Minimization** | 📋 Planned | Medium | Distinguish `exec`/`spec`/`proof` regions, prefer the Verus minimizer, and emit small dependency-free verifying snippets |
 | 1 | **Dataset via Minimizer** | 📋 Planned | Medium | Script minimizer calls, build JSONL datasets for Tasks A/B/C, implement deduplication |
 | 2 | **SFT for Spec Generation (Task A)** | ✅ Prototype | Easy | Train models on code → spec, evaluate on held-out modules |
 | 3 | **SFT for Verified Code Synthesis (Task B)** | 🚧 In Progress | Medium | Train models on spec → code, evaluate by running Verus |
@@ -701,6 +702,24 @@ This repo is designed to support multiple small research projects (e.g., rotatio
 2. **Review the current prototype** in `sft_example.py`
 3. **Read the relevant methodology section** in this README
 4. **Start small**: implement a minimal version, test it, then expand
+
+#### Spotlight: Subproject 0 - Rust/Verus Extraction & Minimization
+
+**Objectives**:
+
+1. **Separate roles**: annotate or segment snippets so executable code, specifications, and proof/lemma blocks are clearly distinguishable for downstream datasets.
+2. **Emit tiny verifying units**: favor small, clean, compilable/verifiable samples with zero external dependencies. When possible, run the Verus minimizer first to shrink source programs before manual extraction.
+
+**Where to start**:
+
+- Follow the [Rust/Verus Code Extraction Method](./RUST_VERUS_EXTRACTION.md) for a step-by-step process.
+- Use the [`verus_code_extraction.py`](./verus_code_extraction.py) scaffold to automate discovery and verification, and log manifest entries for accepted snippets.
+- Keep provenance (paths, git SHAs, verifier output) so samples can be regenerated or audited.
+
+**Deliverables**:
+
+- A repeatable script or notebook that walks a target repo, prefers minimizer outputs when available, and writes JSONL manifests of dependency-free verifying snippets, tagged by `exec`/`spec`/`proof` content.
+- Example snippets demonstrating the separation of code, specs, and proofs for SFT/RL tasks.
 
 #### Spotlight: Subproject 7 - Qwen Model Baseline Evaluation
 

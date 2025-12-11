@@ -52,3 +52,18 @@ We will explore three complementary directions for dataset construction. A robus
 - Automate compilation and verification for every snippet to ensure dataset reliability.
 - Track provenance (original file paths, commit hashes) for traceability.
 - Provide machine-readable labels and metadata to support downstream SFT workflows.
+
+## Feasibility of Rust/Verus Extraction & Minimization (Subproject 0)
+
+### Context and Objective
+The current prototype dataset is small and hand-crafted, limiting diversity and automation. Subproject 0 aims to bootstrap a "minimized, high-quality" corpus of Verus code examples by mining open-source repositories and producing self-contained snippets that compile and verify in isolation. Each snippet will be labeled as executable code, specification, or proof to directly support the broader VerusSFT goal of fine-tuning models on verification-oriented Rust/Verus examples.
+
+### Planned Method and Tools
+This subproject leans on existing Verus infrastructure plus lightweight static analysis to automate extraction:
+
+1. **Candidate Discovery:** Scan target repositories for Rust files with Verus verification elements (e.g., `requires`, `ensures`, `proof`). Use simple static analysis (regex or `rg`) to prioritize files dense with verification constructs.
+2. **Dependency Isolation:** For each candidate, inspect `use` statements and crate metadata (`cargo metadata`) to ensure only standard library or `vstd` dependencies remain. Inline small intra-repo helpers when needed and skip examples that rely on heavy external crates, keeping each snippet self-contained.
+3. **Verus Minimizer Application:** If candidates are still large, run the Verus minimizer (powered by C-Reduce) with an "interestingness" test such as "still verifies" or "still fails with error X" to automatically shrink programs while preserving behavior.
+4. **Snippet Assembly & Validation:** Wrap reduced code into a standalone crate or single file, retag exec/spec/proof regions, and re-run Verus to confirm compilation and verification. Record provenance (repo, file path, commit SHA), verification outcome, and whether minimization was applied.
+
+This workflow directly addresses known gaps (tiny dataset, no minimizer integration) and is implementation-ready, providing a concrete path to populate the initial training corpus for downstream multi-task training and evaluation.

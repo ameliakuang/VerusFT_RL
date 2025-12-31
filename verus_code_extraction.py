@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
-from utils import eval_verus
+from utils import eval_verus, VerusError
 
 # Heuristic tokens that signal Verus/verification-oriented code
 VERUS_TOKENS = {
@@ -48,31 +48,149 @@ class ExtractionResult:
     dependencies: List[str] = field(default_factory=list)
     self_contained: Optional[bool] = False
     verify_time_ms: Optional[int] = None
+    verus_errors: Optional[List[VerusError]] = None
     repo_url: str = ""
     commit_sha: str = ""
+    repo_root: Optional[Path] = None  # Repository root path for computing relative paths
     minimized_status: Optional[str] = None
     segments: dict[str, str] = field(default_factory=dict)  # {"exec": "...", "spec": "...", "proof": "..."}
+    minimize_time_ms: Optional[int] = None  # Time taken for minimization
+    quality_score: Optional[float] = None  # Readability/quality score (0.0-1.0)
+    is_meaningful: Optional[bool] = None  # Has requires/ensures/invariant/proof
+    meets_criteria: Optional[bool] = None  # Meets all dataset inclusion criteria
 
     def to_json(self) -> str:
+        """Convert to structured JSON format, only including fields with values."""
+        code_to_use = self.minimized_code if self.minimized_code else self.code or ""
+        
+        # Generate ID from source path
+        source_name = self.source_path.stem if self.source_path else "unknown"
+        extraction_id = f"{source_name}_{self.commit_sha[:8]}" if self.commit_sha else source_name
+        
+        # Get error type
+        if self.status == "verified":
+            error_type = "none"
+        elif self.status == "failed":
+            msg_lower = self.message.lower() if self.message else ""
+            if "precondition" in msg_lower:
+                error_type = "precondition"
+            elif "postcondition" in msg_lower:
+                error_type = "postcondition"
+            elif "invariant" in msg_lower:
+                error_type = "invariant"
+            else:
+                error_type = "other"
+        elif self.status == "timeout":
+            error_type = "timeout"
+        else:
+            error_type = "unknown"
+        
+        # Count spec elements
+        requires_count = len(re.findall(r'\brequires\s*\(', code_to_use)) if code_to_use else 0
+        ensures_count = len(re.findall(r'\bensures\s*\(', code_to_use)) if code_to_use else 0
+        has_invariant = bool(re.search(r'\binvariant\s*\(', code_to_use)) if code_to_use else False
+        has_proof_block = bool(re.search(r'\bproof\s*\{', code_to_use)) if code_to_use else False
+
+        # Build metadata sections, only including fields with values
+        metadata = {}
+        
+        # Provenance
+        provenance = {}
+        provenance["source_repo"] = self.repo_url
+        
+        # Use absolute file path (simpler and more reliable)
+        if self.source_path:
+            provenance["file_path"] = str(self.source_path.resolve())
+        
+        provenance["commit_sha"] = self.commit_sha
+        if provenance:
+            metadata["provenance"] = provenance
+        
+        # Verification
+        verification = {"status": self.status}
+        if error_type != "none":
+            verification["error_type"] = error_type
+        if self.verify_time_ms is not None:
+            verification["verify_time_ms"] = self.verify_time_ms
+        if self.minimize_time_ms is not None:
+            verification["minimize_time_ms"] = self.minimize_time_ms
+        if self.verus_errors is not None:
+            # Convert VerusError objects to JSON-serializable format
+            verification["verus_errors"] = [
+                {
+                    "error_type": err.error.name,
+                    "error_text": err.error_text,
+                    "message": str(err),
+                    "spans": [
+                        {
+                            "file_name": span.fname,
+                            "lines": list(span.lines),
+                            "label": span.strlabel,
+                            "text": [
+                                {"text": t.text, "highlight_start": t.hl_start, "highlight_end": t.hl_end}
+                                for t in span.text
+                            ]
+                        }
+                        for span in err.trace
+                    ]
+                }
+                for err in self.verus_errors
+            ]
+        verification['minimum_verifiable'] = self.minimum_verifiable
+        verification['minimized_status'] = self.minimized_status
+        metadata["verification"] = verification
+        
+        # Quality
+        quality = {}
+        quality["original_LOC"] = self.original_LOC
+        quality['minimized_LOC'] = self.minimized_LOC
+        
+        if self.self_contained is not None:
+            quality["self_contained"] = self.self_contained
+        if self.dependencies:
+            quality["dependencies"] = self.dependencies
+        if self.verus_tokens > 0:
+            quality["complexity_verus_tokens"] = self.verus_tokens
+        if self.is_meaningful is not None:
+            quality["has_meaningful_spec"] = self.is_meaningful
+        if self.quality_score is not None:
+            quality["readability_score"] = self.quality_score
+        if self.reduction_ratio is not None:
+            quality["reduction_ratio"] = self.reduction_ratio
+        if quality:
+            metadata["quality"] = quality
+        
+        # Labeling
+        labeling = {}
+        if has_invariant:
+            labeling["has_invariant"] = True
+        if has_proof_block:
+            labeling["has_proof_block"] = True
+        if requires_count > 0:
+            labeling["requires_count"] = requires_count
+        if ensures_count > 0:
+            labeling["ensures_count"] = ensures_count
+        
+        # Only include segments with content
+        segments = {}
+        if self.segments.get("exec"):
+            segments["exec"] = self.segments["exec"]
+        if self.segments.get("spec"):
+            segments["spec"] = self.segments["spec"]
+        if self.segments.get("proof"):
+            segments["proof"] = self.segments["proof"]
+        if segments:
+            labeling["segments"] = segments
+        
+        if labeling:
+            metadata["labeling"] = labeling
+        
+        # Build payload
         payload = {
-            "source_path": str(self.source_path),
-            "status": self.status,
-            "message": self.message,
-            "code": self.code,
+            "id": extraction_id,
+            "original_code": self.code,
             "minimized_code": self.minimized_code,
-            "dependencies": self.dependencies,
-            "verus_tokens": self.verus_tokens,
-            "original_LOC": self.original_LOC,
-            "minimized_LOC": self.minimized_LOC,
-            "reduction_ratio": self.reduction_ratio,
-            "minimum_verifiable": self.minimum_verifiable,
-            "dependencies": self.dependencies,
-            "self_contained": self.self_contained,
-            "verify_time_ms": self.verify_time_ms,
-            "repo_url": self.repo_url,
-            "commit_sha": self.commit_sha,
-            "minimized_status": self.minimized_status,
-            "segments": self.segments,
+            "metadata": metadata
         }
         return json.dumps(payload, ensure_ascii=False)
 
@@ -142,6 +260,117 @@ def extract_local_dependencies(text: str) -> List[str]:
     return deps
 
 
+def is_meaningful_verus_code(code: str) -> bool:
+    """
+    Check if code has meaningful verification content:
+    - Has requires/ensures clauses
+    - Has loop invariants
+    - Has proof blocks
+    """
+    meaningful_patterns = [
+        r'\brequires\s*\(',  # requires clauses
+        r'\bensures\s*\(',   # ensures clauses
+        r'\binvariant\s*\(', # loop invariants
+        r'\bproof\s*\{',     # proof blocks
+        r'proof\s+fn\s+',    # proof functions
+    ]
+    
+    for pattern in meaningful_patterns:
+        if re.search(pattern, code):
+            return True
+    return False
+
+
+def compute_quality_score(code: str) -> float:
+    """
+    Compute a quality/readability score (0.0-1.0) for minimized code.
+    Higher score = better quality.
+    
+    Criteria:
+    - Reasonable length (not too short, not too long)
+    - Has structure (functions, structs, etc.)
+    - Has meaningful content (specs, proofs)
+    - Readable formatting
+    """
+    if not code or len(code.strip()) == 0:
+        return 0.0
+    
+    lines = len(code.splitlines())
+    if lines == 0:
+        return 0.0
+    
+    score = 0.0
+    
+    # Length score (prefer 10-100 lines, penalize extremes)
+    if 10 <= lines <= 100:
+        score += 0.3
+    elif 5 <= lines < 10 or 100 < lines <= 200:
+        score += 0.2
+    elif lines < 5:
+        score += 0.1  # Too short
+    else:
+        score += 0.15  # Too long
+    
+    # Structure score (has functions, structs, etc.)
+    structure_keywords = ["fn ", "struct ", "enum ", "impl ", "trait "]
+    structure_count = sum(code.count(kw) for kw in structure_keywords)
+    if structure_count >= 2:
+        score += 0.3
+    elif structure_count == 1:
+        score += 0.2
+    else:
+        score += 0.1
+    
+    # Semantic content score
+    if is_meaningful_verus_code(code):
+        score += 0.3
+    else:
+        score += 0.1  # Still has some value even without specs
+    
+    # Readability score (has comments, proper formatting)
+    # Check for reasonable whitespace and structure
+    non_empty_lines = [l for l in code.splitlines() if l.strip()]
+    if len(non_empty_lines) > 0:
+        avg_line_length = sum(len(l) for l in non_empty_lines) / len(non_empty_lines)
+        if 20 <= avg_line_length <= 100:  # Reasonable line length
+            score += 0.1
+    
+    return min(score, 1.0)  # Cap at 1.0
+
+
+def meets_dataset_criteria(
+    code: str,
+    self_contained: bool,
+    verifiable: bool,
+    quality_score: float
+) -> bool:
+    """
+    Check if code meets ALL criteria for dataset inclusion:
+    1. Self-contained: Only std/core/vstd dependencies
+    2. Verifiable: Verifies successfully OR fails with recoverable error
+    3. Meaningful: Has requires/ensures OR loop invariant OR proof block
+    4. Readable: Quality score ≥ 0.5
+    5. Properly labeled: Can identify exec/spec/proof regions
+    """
+    # 1. Self-contained
+    if not self_contained:
+        return False
+    
+    # 2. Verifiable (we check this separately, assume True if passed here)
+    if not verifiable:
+        return False
+    
+    # 3. Meaningful
+    if not is_meaningful_verus_code(code):
+        return False
+    
+    # 4. Readable
+    if quality_score < 0.5:
+        return False
+
+    return True
+
+
 def score_snapshot(code: str, original_lines: int) -> float:
     """
     Score a snapshot based on how good it is for training.
@@ -154,7 +383,7 @@ def score_snapshot(code: str, original_lines: int) -> float:
     - Penalize code that's too large (> 90% of original - not much reduction)
     """
     lines = len(code.splitlines())
-    if lines == 0:
+    if lines == 0 or original_lines == 0:
         return -1000.0
     
     reduction_pct = (1 - lines / original_lines) * 100
@@ -216,7 +445,7 @@ def select_best_snapshot(snapshot_dir: Path, original_lines: int) -> Optional[Pa
     return best_snapshot
 
 
-def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout: int = 30) -> dict:
+def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout: int = 60) -> dict:
     """
     Minimize Verus code using the creduce-based minimizer with snapshots.
     
@@ -255,7 +484,6 @@ def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout
         
         # Use snapshot interval of 30 seconds
         cmd = [str(minimize_script), tmp_input, interestingness_test, str(cores), "30"]
-        print(f"Running minimizer: {' '.join(cmd)}")
         
         result = subprocess.run(
             cmd,
@@ -489,7 +717,7 @@ def check_dependencies(dependencies: list) -> bool:
 
     return True
 
-def attempt_extract(path: Path, repo_url: str, commit_sha: str, interestingness_test: str = "minimal") -> ExtractionResult:
+def attempt_extract(path: Path, repo_url: str, commit_sha: str, repo_root: Optional[Path] = None, interestingness_test: str = "minimal") -> ExtractionResult:
     text = load_file(path)
     if not contains_verus_tokens(text):
         segments = segment_verus_code(text)
@@ -508,6 +736,7 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, interestingness_
             self_contained=None,
             repo_url=repo_url,
             commit_sha=commit_sha,
+            repo_root=repo_root,
             minimized_status=None,
             segments=segments,
         )
@@ -518,6 +747,11 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, interestingness_
     minimized_code = text  # Default to original code
     minimized_status = None
     segments = {}
+    minimize_time_ms = None  # Initialize
+    quality_score = None
+    is_meaningful = False
+    meets_criteria = False
+    minimum_verifiable = False
     
     try:
         start_time = time.perf_counter()
@@ -532,21 +766,42 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, interestingness_
         
         if verus_succeed:
             # Code verifies, attempt minimization
+            minimize_time_start = time.perf_counter()
             try:
                 minimize_result = verus_minimize(text, interestingness_test)
+                minimize_time_ms = int((time.perf_counter() - minimize_time_start) * 1000)
                 minimized_code = minimize_result["code"]
                 # Map "success" to "succeeded" for consistency with existing code
                 minimize_status = minimize_result["status"]
                 minimized_status = "succeeded" if minimize_status == "success" else "failed"
                 savings = minimize_result.get("savings")
                 
+                # Verify minimized code still verifies
+                minimized_verus_result = eval_verus(minimized_code)
+                minimum_verifiable = minimized_verus_result["verus_succeed"]
+                
                 # Segment the minimized code
                 segments = segment_verus_code(minimized_code)
+                
+                # Compute quality metrics
+                quality_score = compute_quality_score(minimized_code)
+                is_meaningful = is_meaningful_verus_code(minimized_code)
+                meets_criteria = meets_dataset_criteria(
+                    minimized_code,
+                    self_contained=check_dependencies(deps),
+                    verifiable=minimum_verifiable,
+                    quality_score=quality_score
+                )
             except Exception as e:
+                minimize_time_ms = int((time.perf_counter() - minimize_time_start) * 1000)
                 minimized_status = "failed"
                 minimized_code = text  # Fall back to original
                 segments = segment_verus_code(text)
                 savings = None
+                minimum_verifiable = False
+                quality_score = compute_quality_score(text)
+                is_meaningful = is_meaningful_verus_code(text)
+                meets_criteria = False
             
             # Build message with savings if available
             message = f"verified with minimized code with {interestingness_test}, original score: {score}"
@@ -559,40 +814,55 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, interestingness_
                 message,
                 code=text,
                 minimized_code=minimized_code,
-                verus_tokens=score,
+                verus_tokens=score_verus_tokens(minimized_code),
                 original_LOC=len(text.splitlines()),
                 minimized_LOC=len(minimized_code.splitlines()),
                 reduction_ratio=len(minimized_code.splitlines()) / len(text.splitlines()) if len(text.splitlines()) > 0 else None,
-                minimum_verifiable=None,
+                minimum_verifiable=minimum_verifiable,
                 self_contained=check_dependencies(deps),
                 dependencies=deps,
                 verify_time_ms=elapsed_ms,
                 repo_url=repo_url,
                 commit_sha=commit_sha,
+                repo_root=repo_root,
                 minimized_status=minimized_status,
                 segments=segments,
+                minimize_time_ms=minimize_time_ms,
+                quality_score=quality_score,
+                is_meaningful=is_meaningful,
+                meets_criteria=meets_criteria,
             )
         
         # Code doesn't verify - still segment original code
         segments = segment_verus_code(text)
+        quality_score = compute_quality_score(text)
+        is_meaningful = is_meaningful_verus_code(text)
+        meets_criteria = False  # Doesn't verify, so can't meet criteria
+        
         return ExtractionResult(
             path,
             "failed",
-            verus_errors,
+            "\n".join([str(e) for e in verus_errors]),
             code=text,
-            minimized_code=minimized_code,
+            minimized_code=text,
             original_LOC=len(text.splitlines()),
-            minimized_LOC=len(minimized_code.splitlines()),
-            reduction_ratio=len(minimized_code.splitlines()) / len(text.splitlines()) if len(text.splitlines()) > 0 else None,
+            minimized_LOC=len(text.splitlines()),
+            reduction_ratio=1.0,
             minimum_verifiable=False,
             self_contained=check_dependencies(deps),
             dependencies=deps,
-            verus_tokens=score,
+            verus_tokens=score_verus_tokens(text),
             verify_time_ms=elapsed_ms,
             repo_url=repo_url,
             commit_sha=commit_sha,
+            repo_root=repo_root,
             minimized_status=minimized_status,
             segments=segments,
+            minimize_time_ms=None,
+            quality_score=quality_score,
+            is_meaningful=is_meaningful,
+            meets_criteria=meets_criteria,
+            verus_errors=verus_errors,
         )
     except subprocess.TimeoutExpired:
         segments = segment_verus_code(text)
@@ -601,11 +871,12 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, interestingness_
             "timeout", 
             "verification_timeout", 
             code=text,
-            minimized_code=minimized_code, 
+            minimized_code=text, 
             verus_tokens=score,
             dependencies=deps,
             repo_url=repo_url,
             commit_sha=commit_sha,
+            repo_root=repo_root,
             minimized_status=minimized_status,
             segments=segments,
         )
@@ -613,7 +884,101 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, interestingness_
     #     shutil.rmtree(temp_crate, ignore_errors=True)
 
 
-def main(repo: Path, out_dir: Path, limit: Optional[int] = None, interestingness_test: str = "minimal") -> None:
+def print_summary_statistics(results: List[ExtractionResult], out_dir: Path) -> None:
+    """Print summary statistics about the extraction results."""
+    total = len(results)
+    if total == 0:
+        summary_text = "\nNo results to summarize.\n"
+        print(summary_text)
+        summary_file = out_dir / "summary_statistics.txt"
+        summary_file.write_text(summary_text, encoding="utf-8")
+        return
+    
+    verified = sum(1 for r in results if r.status == "verified")
+    failed = sum(1 for r in results if r.status == "failed")
+    skipped = sum(1 for r in results if r.status == "skipped")
+    
+    # Minimization statistics
+    minimized = sum(1 for r in results if r.minimized_status == "succeeded")
+    minimize_times = [r.minimize_time_ms for r in results if r.minimize_time_ms is not None]
+    avg_minimize_time = sum(minimize_times) / len(minimize_times) if minimize_times else 0
+    
+    # Quality statistics
+    meaningful = sum(1 for r in results if r.is_meaningful)
+    meets_criteria_count = sum(1 for r in results if r.meets_criteria)
+    quality_scores = [r.quality_score for r in results if r.quality_score is not None]
+    avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0
+    
+    # Self-containment
+    self_contained_count = sum(1 for r in results if r.self_contained)
+    
+    # Reduction statistics
+    reductions = [r.reduction_ratio for r in results if r.reduction_ratio is not None and r.reduction_ratio < 1.0]
+    avg_reduction = (1 - sum(reductions) / len(reductions)) * 100 if reductions else 0
+    
+    # Build summary text
+    summary_lines = [
+        "="*70,
+        "EXTRACTION SUMMARY STATISTICS",
+        "="*70,
+        f"Total files processed:     {total}",
+        f"  Verified:                 {verified} ({verified/total*100:.1f}%)",
+        f"  Failed:                   {failed} ({failed/total*100:.1f}%)",
+        f"  Skipped:                  {skipped} ({skipped/total*100:.1f}%)",
+        "",
+        "Minimization:",
+        f"  Successfully minimized:   {minimized} ({minimized/total*100:.1f}%)",
+        f"  Avg minimize time:        {avg_minimize_time/1000:.1f}s per file",
+        f"  Avg reduction:           {avg_reduction:.1f}%",
+        "",
+        "Quality Metrics:",
+        f"  Meaningful content:       {meaningful} ({meaningful/total*100:.1f}%)",
+        f"  Avg quality score:        {avg_quality:.2f}/1.0",
+        f"  Meets dataset criteria:   {meets_criteria_count} ({meets_criteria_count/total*100:.1f}%)",
+        "",
+        "Self-containment:",
+        f"  Self-contained:           {self_contained_count} ({self_contained_count/total*100:.1f}%)",
+        "="*70,
+    ]
+    
+    summary_text = "\n".join(summary_lines)
+    
+    # Write to file
+    summary_file = out_dir / "summary_statistics.txt"
+    summary_file.write_text(summary_text, encoding="utf-8")
+    
+    # Also print to console
+    print("\n" + summary_text)
+    print(f"\nSummary statistics saved to: {summary_file}")
+
+
+def load_processed_files(manifest_path: Path, repo_root: Path) -> set[Path]:
+    """Load set of already processed file paths from existing manifest."""
+    processed = set()
+    if not manifest_path.exists():
+        return processed
+    
+    try:
+        with manifest_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    # Extract file_path from metadata.provenance.file_path
+                    file_path_str = data.get("metadata", {}).get("provenance", {}).get("file_path", "")
+                    if file_path_str:
+                        # file_path is now absolute path
+                        processed.add(Path(file_path_str).resolve())
+                except (json.JSONDecodeError, KeyError, ValueError) as e:
+                    continue
+    except Exception as e:
+        print(f"Warning: Could not read existing manifest: {e}")
+    
+    return processed
+
+
+def main(repo: Path, out_dir: Path, limit: Optional[int] = None, interestingness_test: str = "minimal", continue_processing: bool = False) -> None:
     # Get git repository information
     repo_url, commit_sha = get_git_info(repo)
     print(f"Repository URL: {repo_url}")
@@ -622,24 +987,41 @@ def main(repo: Path, out_dir: Path, limit: Optional[int] = None, interestingness
     rust_files = find_rust_files(repo)
     print(f"Found {len(rust_files)} Rust files")
     
-    # Filter files by line count (5-400 lines)
-    rust_files = [f for f in rust_files if 5 <= count_lines(f) <= 400]
-    print(f"Filtered to {len(rust_files)} files with 5-400 lines")
+    # Filter files by line count (50-500 lines)
+    rust_files = [f for f in rust_files if 50 <= count_lines(f) <= 500]
+    print(f"Filtered to {len(rust_files)} files with 50-500 lines")
     rust_files.sort()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = out_dir / "manifest_3.jsonl"
+    
+    # Filter out already processed files if continuing
+    if continue_processing and manifest.exists():
+        processed_files = load_processed_files(manifest, repo)
+        original_count = len(rust_files)
+
+        rust_files = [f for f in rust_files if f.resolve() not in processed_files]
+        skipped_count = original_count - len(rust_files)
+        print(f"Loaded {len(processed_files)} processed files from manifest")
+        print(f"Skipping {skipped_count} already processed files, {len(rust_files)}/{original_count} remaining")
+    
     results: List[ExtractionResult] = []
+    file_mode = "a" if continue_processing and manifest.exists() else "w"
 
     for idx, path in enumerate(rust_files):
         if limit is not None and idx >= limit:
             break
-        result = attempt_extract(path, repo_url=repo_url, commit_sha=commit_sha, interestingness_test=interestingness_test)
+        result = attempt_extract(path, repo_url=repo_url, commit_sha=commit_sha, repo_root=repo, interestingness_test=interestingness_test)
         results.append(result)
         print(result.to_json())
+        # Append each result immediately to avoid losing progress
+        with manifest.open(file_mode, encoding="utf-8") as f:
+            f.write(result.to_json() + "\n")
+        file_mode = "a"  # After first write, always append
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    manifest = out_dir / "manifest_3.jsonl"
-    with manifest.open("w", encoding="utf-8") as f:
-        for item in results:
-            f.write(item.to_json() + "\n")
+    # Print summary statistics
+    print_summary_statistics(results, out_dir)
+
+
 
 
 if __name__ == "__main__":
@@ -650,6 +1032,7 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=Path, default=Path("./extracted_snippets"), help="Output directory for manifest")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit on number of files to process")
     parser.add_argument("--interestingness_test", type=str, default="minimal", choices=['minimal', 'invariant', 'spec'], help="Interestingness test for minimization")
+    parser.add_argument("--continue", dest="continue_processing", action="store_true", help="Continue processing from existing manifest, skipping already processed files")
     args = parser.parse_args()
 
-    main(args.repo, args.out, args.limit, args.interestingness_test)
+    main(args.repo, args.out, args.limit, args.interestingness_test, args.continue_processing)

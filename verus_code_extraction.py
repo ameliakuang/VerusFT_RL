@@ -87,6 +87,15 @@ def find_rust_files(repo_root: Path) -> List[Path]:
     return rust_files
 
 
+def count_lines(path: Path) -> int:
+    """Count the number of lines in a file."""
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as f:
+            return sum(1 for _ in f)
+    except Exception:
+        return 0
+
+
 def contains_verus_tokens(text: str) -> bool:
     return any(token in text for token in VERUS_TOKENS)
 
@@ -133,9 +142,83 @@ def extract_local_dependencies(text: str) -> List[str]:
     return deps
 
 
+def score_snapshot(code: str, original_lines: int) -> float:
+    """
+    Score a snapshot based on how good it is for training.
+    Higher score = better snapshot.
+    
+    Criteria:
+    - Prefer 30-70% reduction (good balance between size and content)
+    - Prefer code with semantic content (functions, structs, etc.)
+    - Penalize code that's too small (< 5 lines or < 5% of original)
+    - Penalize code that's too large (> 90% of original - not much reduction)
+    """
+    lines = len(code.splitlines())
+    if lines == 0:
+        return -1000.0
+    
+    reduction_pct = (1 - lines / original_lines) * 100
+    
+    # Base score from reduction percentage (prefer 30-70% reduction)
+    if 30 <= reduction_pct <= 70:
+        score = 100.0
+    elif 20 <= reduction_pct < 30 or 70 < reduction_pct <= 80:
+        score = 80.0
+    elif 10 <= reduction_pct < 20 or 80 < reduction_pct <= 90:
+        score = 60.0
+    else:
+        score = 40.0
+    
+    # Penalize if too small (likely lost semantic meaning)
+    if lines < 5 or reduction_pct > 95:
+        score -= 50.0
+    
+    # Penalize if too large (not much reduction)
+    if reduction_pct < 10:
+        score -= 30.0
+    
+    # Bonus for semantic content
+    semantic_keywords = ["fn ", "struct ", "enum ", "impl ", "trait ", "spec ", "proof "]
+    keyword_count = sum(code.count(kw) for kw in semantic_keywords)
+    score += min(keyword_count * 5, 20)  # Up to 20 bonus points
+    
+    # Bonus for having function definitions (most important)
+    if re.search(r'\bfn\s+\w+\s*\(', code):
+        score += 15.0
+    
+    return score
+
+
+def select_best_snapshot(snapshot_dir: Path, original_lines: int) -> Optional[Path]:
+    """
+    Select the best snapshot from available snapshots.
+    Returns the path to the best snapshot, or None if no snapshots found.
+    """
+    snapshot_files = sorted(snapshot_dir.glob("foo.rs.snapshot_*"))
+    
+    if not snapshot_files:
+        return None
+    
+    best_snapshot = None
+    best_score = -float('inf')
+    
+    for snapshot_file in snapshot_files:
+        try:
+            snapshot_code = snapshot_file.read_text(encoding="utf-8")
+            score = score_snapshot(snapshot_code, original_lines)
+            
+            if score > best_score:
+                best_score = score
+                best_snapshot = snapshot_file
+        except Exception:
+            continue
+    
+    return best_snapshot
+
+
 def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout: int = 30) -> dict:
     """
-    Minimize Verus code using the creduce-based minimizer.
+    Minimize Verus code using the creduce-based minimizer with snapshots.
     
     Args:
         code: The Verus code to minimize
@@ -145,12 +228,15 @@ def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout
     
     Returns:
         Dictionary with keys:
-        - 'code': Minimized code as a string
+        - 'code': Minimized code as a string (best snapshot selected)
         - 'status': 'success' if minimization completed, 'failed' otherwise
         - 'savings': Savings percentage as an integer (or None if not found)
+        - 'snapshot_used': Path to the snapshot file used (or None)
+        - 'all_snapshots': List of all snapshot paths (for manual review)
     """
     minimizer_dir = Path("/Users/ameliakuang/Repos/verus-sft/chuyue_verus/source/tools/minimizers")
-    minimize_script = minimizer_dir / "minimize.sh"
+    minimize_script = minimizer_dir / "minimize_with_snapshots.sh"
+    snapshot_dir = minimizer_dir / "snapshots"
     
     if not minimize_script.exists():
         raise FileNotFoundError(f"Minimizer script not found at {minimize_script}")
@@ -160,51 +246,107 @@ def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout
         tmp_file.write(code)
         tmp_input = tmp_file.name
     
+    original_lines = len(code.splitlines())
+    
     try:
-        # Run the minimizer script
+        # Run the minimizer script with snapshots
         env = os.environ.copy()
         env["TIMEOUT"] = str(timeout)
         
+        # Use snapshot interval of 30 seconds
+        cmd = [str(minimize_script), tmp_input, interestingness_test, str(cores), "30"]
+        print(f"Running minimizer: {' '.join(cmd)}")
+        
         result = subprocess.run(
-            [str(minimize_script), tmp_input, interestingness_test, str(cores)],
+            cmd,
             capture_output=True,
             text=True,
-            check=True,
+            check=False,  # Don't fail if minimization has issues - we'll check returncode
             env=env,
+            timeout=timeout * 60,  # Add timeout back
         )
         
-        # Parse output for status and savings
+        # Parse output for status
         output = result.stdout + result.stderr
+
+        # Debug: print errors if script failed
+        if result.returncode != 0:
+            print(f"Warning: Minimizer script exited with code {result.returncode}")
+            print(f"Stdout: {result.stdout[:1000]}")
+            print(f"Stderr: {result.stderr[:1000]}")
+        
         status = "success" if "Minimization Complete!" in output else "failed"
         
-        # Extract savings ratio using regex
+        # Try to find and select best snapshot
+        minimized_code = code
+        snapshot_used = None
+        all_snapshots = []
         savings = None
-        if status == "success":
-            savings_match = re.search(r"Savings:\s*(\d+)%", output)
-        if savings_match:
-            savings = int(savings_match.group(1))
         
-        # The minimizer writes output to foo.rs in the minimizer directory
-        minimized_file = minimizer_dir / "foo.rs"
-        if minimized_file.exists():
-            minimized_code = minimized_file.read_text(encoding="utf-8")
-        else:
-            # If foo.rs doesn't exist, return original code
-            minimized_code = code
-            if status == "success":
-                status = "failed"  # Can't be successful if output file doesn't exist
+        if snapshot_dir.exists():
+            all_snapshots = sorted(snapshot_dir.glob("foo.rs.snapshot_*"))
+            
+            if all_snapshots:
+                # Select best snapshot based on scoring
+                best_snapshot = select_best_snapshot(snapshot_dir, original_lines)
+                
+                if best_snapshot:
+                    minimized_code = best_snapshot.read_text(encoding="utf-8")
+                    snapshot_used = best_snapshot
+                    final_lines = len(minimized_code.splitlines())
+                    savings = int((1 - final_lines / original_lines) * 100) if original_lines > 0 else 0
+                    status = "success"
+        
+        # Fallback to final foo.rs if no good snapshot found
+        if not snapshot_used:
+            minimized_file = minimizer_dir / "foo.rs"
+            if minimized_file.exists():
+                minimized_code = minimized_file.read_text(encoding="utf-8")
+                final_lines = len(minimized_code.splitlines())
+                savings = int((1 - final_lines / original_lines) * 100) if original_lines > 0 else 0
+                
+                # Only mark as success if we got meaningful reduction
+                if savings and savings > 5:
+                    status = "success"
         
         return {
             "code": minimized_code,
             "status": status,
-            "savings": savings
+            "savings": savings,
+            "snapshot_used": str(snapshot_used) if snapshot_used else None,
+            "all_snapshots": [str(s) for s in all_snapshots],
         }
-    except Exception as e:
-        # Minimization failed, return original code
+    except subprocess.TimeoutExpired:
+        # Minimization timed out
+        print(f"Warning: Minimization timed out after {timeout * 60} seconds")
         return {
             "code": code,
             "status": "failed",
-            "savings": None
+            "savings": None,
+            "snapshot_used": None,
+            "all_snapshots": [],
+        }
+    except subprocess.TimeoutExpired:
+        # Minimization timed out
+        print(f"Warning: Minimization timed out after {timeout * 60} seconds")
+        return {
+            "code": code,
+            "status": "failed",
+            "savings": None,
+            "snapshot_used": None,
+            "all_snapshots": [],
+        }
+    except Exception as e:
+        # Minimization failed, return original code
+        print(f"Warning: Minimization failed with error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "code": code,
+            "status": "failed",
+            "savings": None,
+            "snapshot_used": None,
+            "all_snapshots": [],
         }
     finally:
         # Clean up temporary input file
@@ -316,7 +458,6 @@ def build_temp_crate(snippet: str) -> Path:
     return temp_dir
 
 
-# TODO: check with Livia - whether this verification logic is correct
 def verify_snippet(temp_crate: Path, timeout: int = 30) -> subprocess.CompletedProcess:
     cmd = ["verus","--crate-type=lib", str(temp_crate / "src" / "lib.rs")]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
@@ -480,6 +621,10 @@ def main(repo: Path, out_dir: Path, limit: Optional[int] = None, interestingness
     
     rust_files = find_rust_files(repo)
     print(f"Found {len(rust_files)} Rust files")
+    
+    # Filter files by line count (5-400 lines)
+    rust_files = [f for f in rust_files if 5 <= count_lines(f) <= 400]
+    print(f"Filtered to {len(rust_files)} files with 5-400 lines")
     rust_files.sort()
     results: List[ExtractionResult] = []
 
@@ -491,7 +636,7 @@ def main(repo: Path, out_dir: Path, limit: Optional[int] = None, interestingness
         print(result.to_json())
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest = out_dir / "manifest.jsonl"
+    manifest = out_dir / "manifest_3.jsonl"
     with manifest.open("w", encoding="utf-8") as f:
         for item in results:
             f.write(item.to_json() + "\n")

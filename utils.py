@@ -1,11 +1,67 @@
+'''
+
+'''
 import os
 import logging
 import json
 import subprocess
 import tempfile
+import shutil
 from enum import Enum
 from typing import Tuple, List, Optional, Dict, Any
 import re
+
+# Try to load dotenv, but make it optional
+try:
+    from dotenv import load_dotenv
+    DOTENV_AVAILABLE = True
+except ImportError:
+    DOTENV_AVAILABLE = False
+    # Define a no-op function if dotenv is not available
+    def load_dotenv(*args, **kwargs):
+        pass
+
+
+def find_verus_path() -> Optional[str]:
+    """
+    Discover the Verus executable path.
+    Checks: VERUS_PATH env var, .env file, PATH, common locations.
+    Returns resolved path or None.
+    """
+    # Load .env file if dotenv is available
+    if DOTENV_AVAILABLE:
+        # Look for .env in current directory and parent directories
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        for _ in range(4):  # Check up to 3 parent dirs
+            env_file = os.path.join(current_dir, ".env")
+            if os.path.exists(env_file):
+                load_dotenv(env_file, override=False)  # Don't override existing env vars
+                break
+            parent_dir = os.path.dirname(current_dir)
+            if parent_dir == current_dir:  # Reached root
+                break
+            current_dir = parent_dir
+    
+    # Check VERUS_PATH environment variable
+    verus_path_env = os.environ.get("VERUS_PATH")
+    if verus_path_env:
+        path = os.path.expanduser(verus_path_env)
+        if os.path.exists(path):
+            # If it's a directory, look for verus inside it
+            if os.path.isdir(path):
+                verus_in_dir = os.path.join(path, "verus")
+                if os.path.exists(verus_in_dir) and os.access(verus_in_dir, os.X_OK):
+                    return os.path.realpath(verus_in_dir)
+            # If it's a file and executable
+            elif os.access(path, os.X_OK):
+                return os.path.realpath(path)
+    
+    # Try to find 'verus' in PATH
+    verus_cmd = shutil.which("verus")
+    if verus_cmd:
+        return os.path.realpath(verus_cmd)
+    
+    return None
 
 
 class Verus:
@@ -18,9 +74,26 @@ class Verus:
         # print(f"verus path: {self.verus_path}")
         # print(f"vstd path: {self.vstd_path}")
 
+    def discover_verus_path(self):
+        """Auto-discover verus path if not already set."""
+        if self.verus_path is None:
+            # Try to find verus (handles .env loading, VERUS_PATH env var, and PATH)
+            found_path = find_verus_path()
+            if found_path:
+                self.set_verus_path(found_path)
+                print(f"Found Verus path: {self.verus_path}")
+            else:
+                import warnings
+                warnings.warn(
+                    "Verus path not found. Please set VERUS_PATH environment variable or ensure 'verus' is in PATH.\n"
+                    "Example: export VERUS_PATH=/path/to/verus\n"
+                    "Or create a .env file in the project root with: VERUS_PATH=/path/to/verus",
+                    UserWarning
+                )
+
 
 verus = Verus()
-verus.set_verus_path("/Users/ameliakuang/Repos/verus/verus")
+verus.discover_verus_path()
 
 class VerusErrorType(Enum):
     PreCondFail = 1

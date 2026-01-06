@@ -58,6 +58,7 @@ class ExtractionResult:
     quality_score: Optional[float] = None  # Readability/quality score (0.0-1.0)
     is_meaningful: Optional[bool] = None  # Has requires/ensures/invariant/proof
     meets_criteria: Optional[bool] = None  # Meets all dataset inclusion criteria
+    all_snapshots: List[str] = field(default_factory=list)  # All snapshot paths from minimization
 
     def to_json(self) -> str:
         """Convert to structured JSON format, only including fields with values."""
@@ -190,7 +191,8 @@ class ExtractionResult:
             "id": extraction_id,
             "original_code": self.code,
             "minimized_code": self.minimized_code,
-            "metadata": metadata
+            "metadata": metadata,
+            "all_snapshots": self.all_snapshots,
         }
         return json.dumps(payload, ensure_ascii=False)
 
@@ -350,7 +352,6 @@ def meets_dataset_criteria(
     2. Verifiable: Verifies successfully OR fails with recoverable error
     3. Meaningful: Has requires/ensures OR loop invariant OR proof block
     4. Readable: Quality score ≥ 0.5
-    5. Properly labeled: Can identify exec/spec/proof regions
     """
     # 1. Self-contained
     if not self_contained:
@@ -451,7 +452,7 @@ def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout
     
     Args:
         code: The Verus code to minimize
-        interestingness_test: Type of minimizer ("invariant", "spec", "minimal", etc.)
+        interestingness_test: Type of minimizer ("invariant", "spec", "minimal")
         cores: Number of cores to use for minimization
         timeout: Verification timeout in seconds
     
@@ -542,7 +543,7 @@ def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout
             "status": status,
             "savings": savings,
             "snapshot_used": str(snapshot_used) if snapshot_used else None,
-            "all_snapshots": [str(s) for s in all_snapshots],
+            "all_snapshots": [s.read_text(encoding="utf-8") for s in all_snapshots],
         }
     except subprocess.TimeoutExpired:
         # Minimization timed out
@@ -658,38 +659,6 @@ def segment_verus_code(code: str) -> dict[str, str]:
     }
 
 
-def build_temp_crate(snippet: str) -> Path:
-    temp_dir = Path(tempfile.mkdtemp(prefix="verus_extract_"))
-    src_dir = temp_dir / "src"
-    src_dir.mkdir(parents=True, exist_ok=True)
-
-    lib_rs = src_dir / "lib.rs"
-    if "verus!" not in snippet:
-        snippet = f"verus! {{\n{snippet}\n}}\n"
-    lib_rs.write_text(snippet, encoding="utf-8")
-
-    cargo_toml = temp_dir / "Cargo.toml"
-    cargo_toml.write_text(
-        "\n".join(
-            [
-                "[package]",
-                "name = \"verus_extract\"",
-                "version = \"0.1.0\"",
-                "edition = \"2021\"",
-                "",
-                "[dependencies]",
-                "verus = \"*\"",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return temp_dir
-
-
-def verify_snippet(temp_crate: Path, timeout: int = 30) -> subprocess.CompletedProcess:
-    cmd = ["verus","--crate-type=lib", str(temp_crate / "src" / "lib.rs")]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
-
 def check_dependencies(dependencies: list) -> bool:
     """Check if dependencies only include std, core, or vstd."""
     if not dependencies:
@@ -743,11 +712,10 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, repo_root: Optio
 
     score = score_verus_tokens(text)
     deps = extract_local_dependencies(text)
-    # temp_crate = build_temp_crate(text)
-    minimized_code = text  # Default to original code
+    minimized_code = text
     minimized_status = None
     segments = {}
-    minimize_time_ms = None  # Initialize
+    minimize_time_ms = None
     quality_score = None
     is_meaningful = False
     meets_criteria = False
@@ -755,7 +723,6 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, repo_root: Optio
     
     try:
         start_time = time.perf_counter()
-        # proc = verify_snippet(temp_crate)
         verus_result = eval_verus(text)
         verus_succeed = verus_result["verus_succeed"]
         verified_count = verus_result["verified_count"]
@@ -771,10 +738,10 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, repo_root: Optio
                 minimize_result = verus_minimize(text, interestingness_test)
                 minimize_time_ms = int((time.perf_counter() - minimize_time_start) * 1000)
                 minimized_code = minimize_result["code"]
-                # Map "success" to "succeeded" for consistency with existing code
                 minimize_status = minimize_result["status"]
                 minimized_status = "succeeded" if minimize_status == "success" else "failed"
                 savings = minimize_result.get("savings")
+                all_snapshots = minimize_result.get("all_snapshots", [])
                 
                 # Verify minimized code still verifies
                 minimized_verus_result = eval_verus(minimized_code)
@@ -798,6 +765,7 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, repo_root: Optio
                 minimized_code = text  # Fall back to original
                 segments = segment_verus_code(text)
                 savings = None
+                all_snapshots = [text]
                 minimum_verifiable = False
                 quality_score = compute_quality_score(text)
                 is_meaningful = is_meaningful_verus_code(text)
@@ -831,6 +799,7 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, repo_root: Optio
                 quality_score=quality_score,
                 is_meaningful=is_meaningful,
                 meets_criteria=meets_criteria,
+                all_snapshots=all_snapshots,
             )
         
         # Code doesn't verify - still segment original code
@@ -880,18 +849,21 @@ def attempt_extract(path: Path, repo_url: str, commit_sha: str, repo_root: Optio
             minimized_status=minimized_status,
             segments=segments,
         )
-    # finally:
-    #     shutil.rmtree(temp_crate, ignore_errors=True)
 
 
-def print_summary_statistics(results: List[ExtractionResult], out_dir: Path) -> None:
+
+def print_summary_statistics(results: List[ExtractionResult], 
+                            out_dir: Path,
+                            write_res: bool = True
+                            ) -> None:
     """Print summary statistics about the extraction results."""
     total = len(results)
     if total == 0:
         summary_text = "\nNo results to summarize.\n"
         print(summary_text)
-        summary_file = out_dir / "summary_statistics.txt"
-        summary_file.write_text(summary_text, encoding="utf-8")
+        if write_res:
+            summary_file = out_dir / "summary_statistics.txt"
+            summary_file.write_text(summary_text, encoding="utf-8")
         return
     
     verified = sum(1 for r in results if r.status == "verified")
@@ -942,14 +914,11 @@ def print_summary_statistics(results: List[ExtractionResult], out_dir: Path) -> 
     ]
     
     summary_text = "\n".join(summary_lines)
-    
-    # Write to file
-    summary_file = out_dir / "summary_statistics.txt"
-    summary_file.write_text(summary_text, encoding="utf-8")
-    
-    # Also print to console
     print("\n" + summary_text)
-    print(f"\nSummary statistics saved to: {summary_file}")
+    if write_res:
+        summary_file = out_dir / "summary_statistics.txt"
+        summary_file.write_text(summary_text, encoding="utf-8")
+        print(f"\nSummary statistics saved to: {summary_file}")
 
 
 def load_processed_files(manifest_path: Path, repo_root: Path) -> set[Path]:

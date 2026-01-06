@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
-from utils import eval_verus, VerusError
+from verus_eval_utils import eval_verus, VerusError
 
 # Heuristic tokens that signal Verus/verification-oriented code
 VERUS_TOKENS = {

@@ -967,7 +967,7 @@ def main(repo: Path, out_dir: Path, limit: Optional[int] = None, interestingness
     print(f"Filtered to {len(rust_files)} files with 50-500 lines")
     rust_files.sort()
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest = out_dir / "manifest_3.jsonl"
+    manifest = out_dir / "manifest.jsonl"
     
     # Filter out already processed files if continuing
     if continue_processing and manifest.exists():

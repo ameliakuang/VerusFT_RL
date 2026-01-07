@@ -1,3 +1,3 @@
 use vstd::prelude::*;
-        fn main() {
-      }
+              fn main() {
+    }

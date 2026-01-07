@@ -9,14 +9,14 @@ import argparse
 
 
 def read_jsonl_files(directories: List[Path]) -> List[Dict[str, Any]]:
-    """Read all manifest_*.jsonl files from the given directories."""
+    """Read all manifest.jsonl files from the given directories."""
     all_entries = []
     
     for directory in directories:
         if not directory.exists():
             continue
         
-        for manifest_file in directory.glob("manifest_*.jsonl"):
+        for manifest_file in directory.glob("manifest.jsonl"):
             print(f"Reading {manifest_file}")
             try:
                 with manifest_file.open("r", encoding="utf-8") as f:

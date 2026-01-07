@@ -1,5 +1,6 @@
 '''
-
+This file adapts https://github.com/ChuyueSun/VeriStruct/blob/main/src/modules/veval.py#L484
+and contains functions to evaluate inline, standalone Verus code and parse the output.
 '''
 import os
 import logging

@@ -5,6 +5,7 @@ import json
 import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Any
+import argparse
 
 
 def read_jsonl_files(directories: List[Path]) -> List[Dict[str, Any]]:
@@ -198,9 +199,8 @@ def print_stats(rows: List[Dict[str, Any]], print_anomalies: bool = False) -> No
                 break
 
 
-def main():
+def main(base_dir: Path):
     """Main function to run the analysis."""
-    base_dir = Path("/Users/ameliakuang/Repos/verus-sft/VerusFT_RL/extracted_snippets")
     directories = [
         base_dir / "autoverus_examples",
         base_dir / "vericoding_benchmarks_verus",
@@ -221,4 +221,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Analyze Verus code extraction results")
+    parser.add_argument("--base_dir", type=Path, default=Path("./extracted_snippets"), help="Path to the base directory containing extracted snippets")
+    args = parser.parse_args()
+    main(args.base_dir)

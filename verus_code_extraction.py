@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -464,12 +465,17 @@ def verus_minimize(code: str, interestingness_test: str, cores: int = 4, timeout
         - 'snapshot_used': Path to the snapshot file used (or None)
         - 'all_snapshots': List of all snapshot paths (for manual review)
     """
-    minimizer_dir = Path("/Users/ameliakuang/Repos/verus-sft/chuyue_verus/source/tools/minimizers")
+    # Use local minimizer script in VerusFT_RL directory
+    minimizer_dir = Path(__file__).parent / "minimizer"
     minimize_script = minimizer_dir / "minimize_with_snapshots.sh"
     snapshot_dir = minimizer_dir / "snapshots"
     
-    if not minimize_script.exists():
-        raise FileNotFoundError(f"Minimizer script not found at {minimize_script}")
+    # Make script executable if it's not already
+    if minimize_script.exists():
+        current_mode = minimize_script.stat().st_mode
+        executable_bits = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        if not (current_mode & executable_bits):  # If not already executable
+            minimize_script.chmod(current_mode | executable_bits)
     
     # Create a temporary file with the code
     with tempfile.NamedTemporaryFile(mode='w', suffix='.rs', delete=False, encoding='utf-8') as tmp_file:

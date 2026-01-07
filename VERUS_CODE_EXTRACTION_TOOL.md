@@ -9,7 +9,7 @@ The extraction process follows these steps:
 1. **File Discovery**: Scans repository for `.rs` files (50-500 lines)
 2. **Token Detection**: Identifies Verus code by scanning for verification-specific tokens (`requires`, `ensures`, `invariant`, `proof`, `verus!`, etc.)
 3. **Verification**: Runs Verus verifier on the code to ensure it's valid
-4. **Minimization** (if verified): Uses creduce-based minimizer to reduce code size while preserving verification properties
+4. **Minimization** (if verified): Uses creduce-based minimizer to reduce code size while preserving verification properties, all snapshots during the minimization stage are saved to pick the best and most representative snapshots while retaining all snapshots.
 5. **Segmentation**: Separates code into exec (executable), spec (specification), and proof zones
 6. **Quality Assessment**: Computes metrics (readability scores, reduction ratios, self-containment checks)
 7. **Export**: Writes results to JSONL manifest file

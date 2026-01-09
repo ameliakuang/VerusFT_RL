@@ -111,7 +111,7 @@ The `analysis.py` script reads all `manifest.jsonl` files from the subdirectorie
 The current dataset contains extracted snippets from three repositories:
 
 - **autoverus_examples**: 15 samples extracted from [microsoft/verus-proof-synthesis/autoverus/examples](https://github.com/microsoft/verus-proof-synthesis/tree/main/autoverus/examples)
-- **vericoding_benchmarks_verus**: 420 samples extracted from [Beneficial-AI-Foundation/vericoding/benchmarks/verus](https://github.com/Beneficial-AI-Foundation/vericoding/tree/main/benchmarks/verus)
+- **vericoding_benchmarks_verus**: 637 samples extracted from [Beneficial-AI-Foundation/vericoding/benchmarks/verus](https://github.com/Beneficial-AI-Foundation/vericoding/tree/main/benchmarks/verus)
 - **verus_examples**: 103 samples extracted from [verus-lang/verus/examples](https://github.com/verus-lang/verus/tree/main/examples)
 
-**Total**: 538 samples across all repositories.
+**Total**: 755 samples across all repositories.

@@ -352,7 +352,7 @@ def eval_verus(
     # cmd = (f"{self.verus_path} {multiple_errors} {err_format} {code_path}").split(" ")
     # Bug fix: code_path may contain white space
     # Use --crate-type=lib like verify_snippet does to avoid requiring main() function
-    cmd = (f"verus --crate-type=lib {multiple_errors} {err_format}").split(" ")
+    cmd = (f"{verus.verus_path} --crate-type=lib {multiple_errors} {err_format}").split(" ")
     cmd += [code_path]
     if func_name:
         cmd += ["--verify-function", func_name, "--verify-root"]
